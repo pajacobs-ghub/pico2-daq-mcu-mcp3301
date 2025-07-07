@@ -23,7 +23,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.8 2025-04-15 Pico2 as DAQ-MCU"
+#define VERSION_STR "v0.9 2025-07-07 Pico2 as DAQ-MCU"
 #define EIGHT_MCP3301
 #ifdef EIGHT_MCP3301
 const uint n_mcp3301_chips = 8;

@@ -3,7 +3,7 @@
 ;
 ; Hints taken from the C/C++ SDK and
 ; https://github.com/raspberrypi/pico-examples/blob/master/pio/spi/spi.pio
-; 
+;
 ; Peter J. 2025-04-12 First cut
 ;          2025-04-14 Shift the RX Pin, so that we may have several.
 ;          2025-04-15 Add program for reading eight chips together.
@@ -27,12 +27,12 @@ bitloop:
 	nop             side 0x0 [1]  ; CLK low
 	in pins, 1      side 0x2      ; read RX pin, set CLK high
 	jmp x-- bitloop side 0x2      ; CLK stays high as we go for the next bit.
-	
+
 	; If we fall-through to here, all bits are now shifted in
 	; so we push them into the RX FIFO.
 	push            side 0x0      ; take CLK low
 	nop             side 0x0 [1]  ; keep CSn low a while longer
-	
+
 public entry_point:
     ; We block here until the CPU writes a word to the TX FIFO.
     ; We don't actually use that word as data but as a release.
@@ -91,12 +91,12 @@ bitloop:
 	nop             side 0x0 [1]  ; CLK low
 	in pins, 8      side 0x2      ; read RX pins, set CLK high
 	jmp x-- bitloop side 0x2      ; CLK stays high as we go for the next bit.
-	
+
 	; If we fall-through to here, all bits are now shifted in
 	; so we push them into the RX FIFO.
 	push iffull     side 0x0      ; take CLK low
 	nop             side 0x0 [1]  ; keep CSn low a while longer
-	
+
 public entry_point:
     ; We block here until the CPU writes a word to the TX FIFO.
     ; We don't actually use that word as data but as a release.
@@ -131,7 +131,7 @@ static inline void mcp3301_eight_read_program_init(PIO pio, uint sm, uint offset
 	pio_gpio_init(pio, 6); // CLK
 	pio_sm_set_consecutive_pindirs(pio, sm, 5, 2, true);
 	//
-	pio_sm_init(pio, sm, offset + mcp3301_one_read_offset_entry_point, &c);
+	pio_sm_init(pio, sm, offset + mcp3301_eight_read_offset_entry_point, &c);
 	pio_sm_set_enabled(pio, sm, true);
 }
 %}
