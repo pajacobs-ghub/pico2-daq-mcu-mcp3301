@@ -23,13 +23,8 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.9 2025-07-07 Pico2 as DAQ-MCU"
-#define EIGHT_MCP3301
-#ifdef EIGHT_MCP3301
+#define VERSION_STR "v0.10 2025-07-11 Pico2 as DAQ-MCU"
 const uint n_mcp3301_chips = 8;
-#else
-const uint n_mcp3301_chips = 1;
-#endif
 
 // Names for the IO pins.
 const uint READY_PIN = 22;
@@ -39,7 +34,6 @@ const uint SYSTEM_EVENTn_PIN = 2;
 const uint PIO_CSn_PIN = 5;
 const uint PIO_CLK_PIN = 6;
 const uint PIO_RX0_PIN = 7;
-#ifdef EIGHT_MCP3301
 const uint PIO_RX1_PIN = 8;
 const uint PIO_RX2_PIN = 9;
 const uint PIO_RX3_PIN = 10;
@@ -47,7 +41,6 @@ const uint PIO_RX4_PIN = 11;
 const uint PIO_RX5_PIN = 12;
 const uint PIO_RX6_PIN = 13;
 const uint PIO_RX7_PIN = 14;
-#endif
 
 static inline void assert_ready()
 {
@@ -137,7 +130,7 @@ static inline uint32_t oldest_halfword_index_in_data()
 }
 
 static inline void unpack_nybbles_from_word(uint32_t word, uint16_t values[], uint bit_base) {
-	// 
+	//
 	// There are 8 by 4-bit values interleaved.
 	// 31     24       16       8        0  bits in word
 	// |      |        |        |        |
@@ -196,9 +189,8 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
         raise_flag_pin(); // to allow timing via a logic probe.
         //
         // Take the analog sample set.
-#		ifdef EIGHT_MCP3301
         // Read all 8 MCP3301 chips via the PIO.
-        // Each of four 32-bit words coming from the PIO's RX FIFO 
+        // Each of four 32-bit words coming from the PIO's RX FIFO
         // will hold one 4-bit nybble for each of eight MCP3301 bit streams.
         uint16_t values[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 		pio_sm_put_blocking(pio0, 0, 1);
@@ -218,21 +210,6 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
 			if (value & 0x1000) { value |= 0xe000; }
 			res[ch] = (int16_t)value;
 		}
-#       else
-        // Read only MCP3301 chip 0.
-		uint16_t value = 0;
-		pio_sm_put_blocking(pio0, 0, 1);
-		uint32_t pio_data = pio_sm_get_blocking(pio0, 0);
-		value = (uint16_t)pio_data;
-        // The first couple of bits are not driven, only 13 should be kept.
-        value &= 0x1fff;
-        // We need to sign-extend the 13-bit number.
-        if (value & 0x1000) { value |= 0xe000; }
-        res[0] = (int16_t)value;
-        for (uint8_t ch=1; ch < n_chan; ch++) {
-            res[ch] = (int16_t)0;
-        }
-#       endif
         // Save the sample set for later.
         for (uint8_t ch=0; ch < n_chan; ch++) {
             data[next_halfword_index_in_data+ch] = res[ch];
@@ -541,7 +518,6 @@ int main()
     bi_decl(bi_1pin_with_name(PIO_CSn_PIN, "PIO0 chip select pin"));
     bi_decl(bi_1pin_with_name(PIO_CLK_PIN, "PIO0 clock output pin"));
     bi_decl(bi_1pin_with_name(PIO_RX0_PIN, "PIO0 data0 input pin"));
-#   ifdef EIGHT_MCP3301
     bi_decl(bi_1pin_with_name(PIO_RX1_PIN, "PIO0 data1 input pin"));
     bi_decl(bi_1pin_with_name(PIO_RX2_PIN, "PIO0 data2 input pin"));
     bi_decl(bi_1pin_with_name(PIO_RX3_PIN, "PIO0 data3 input pin"));
@@ -549,7 +525,6 @@ int main()
     bi_decl(bi_1pin_with_name(PIO_RX5_PIN, "PIO0 data5 input pin"));
     bi_decl(bi_1pin_with_name(PIO_RX6_PIN, "PIO0 data6 input pin"));
     bi_decl(bi_1pin_with_name(PIO_RX7_PIN, "PIO0 data7 input pin"));
-#   endif
 	//
 	// Flash LED twice at start up.
 	//
@@ -562,13 +537,8 @@ int main()
 	//
 	// Start the PIO state machine to talk to the MCP3301 chips.
 	//
-#   ifdef EIGHT_MCP3301
 	uint offset = pio_add_program(pio0, &mcp3301_eight_read_program);
 	mcp3301_eight_read_program_init(pio0, 0, offset);
-#   else
-	uint offset = pio_add_program(pio0, &mcp3301_one_read_program);
-	mcp3301_one_read_program_init(pio0, 0, offset);
-#   endif
 	//
 	// We output an event pin that gets buffered by the COMMS MCU
 	// and reflected onto the system event line.
@@ -600,7 +570,7 @@ int main()
 		m = trim_string(bufA);
         // Note that the cmd string may be of zero length,
         // with the null character in the first place.
-        // If that is the case, do nothing with it 
+        // If that is the case, do nothing with it
 		// but just reply with a newline character.
         if (m > 0) {
             interpret_command(bufA);
