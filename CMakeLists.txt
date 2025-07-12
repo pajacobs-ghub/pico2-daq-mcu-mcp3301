@@ -10,7 +10,7 @@ set(PICO_SDK_INIT_CMAKE_FILE ${PICO_SDK_PATH}/pico_sdk_init.cmake)
 include(${PICO_SDK_INIT_CMAKE_FILE})
 message("Raspberry Pi Pico SDK version is ${PICO_SDK_VERSION_STRING}")
 
-project(tcd1304_reader C CXX ASM)
+project(pico2_daq_mcp3301 C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 # Initialize the SDK
@@ -28,7 +28,7 @@ target_sources(pico2_daq_mcp3301 PRIVATE pico2_daq_mcp3301.c)
 
 # pull in common dependencies
 target_link_libraries(pico2_daq_mcp3301 PRIVATE
-	pico_stdlib 
+	pico_stdlib
 	hardware_pio
 	hardware_timer
 	hardware_spi
