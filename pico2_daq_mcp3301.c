@@ -7,6 +7,7 @@
 //    2025-04-13: have the PIO working to collect MCP3301 0 data.
 //    2025-04-14: move PIO-RX pin so that we have room for 8 RX pins.
 //    2025-04-15: implement code for reading 8 MCP3301 chips.
+//    2026-03-03: Adapt to PCB Rev. 1
 //
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
@@ -23,13 +24,13 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.10 2025-07-11 Pico2 as DAQ-MCU"
+#define VERSION_STR "v0.11 2026-03-03 Pico2 as DAQ-MCU"
 const uint n_mcp3301_chips = 8;
 
 // Names for the IO pins.
-const uint READY_PIN = 22;
+const uint READY_PIN = 15;
 const uint FLAG_PIN = 26;
-const uint Pico2_EVENT_PIN = 3;
+const uint Pico2_EVENT_PIN = 3; // not used in PCB Rev. 1
 const uint SYSTEM_EVENTn_PIN = 2;
 const uint PIO_CSn_PIN = 5;
 const uint PIO_CLK_PIN = 6;
