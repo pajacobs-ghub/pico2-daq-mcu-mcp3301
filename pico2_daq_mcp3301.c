@@ -28,7 +28,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.12 Pico2 as DAQ-MCU 2026-03-03"
+#define VERSION_STR "v0.13 Pico2 as DAQ-MCU 2026-03-04"
 const uint n_adc_chips = 8;
 
 // Names for the IO pins.
@@ -150,7 +150,7 @@ uint8_t event_n;
 uint8_t did_not_keep_up_during_sampling;
 
 // Parameters controlling the device are stored in virtual config registers.
-#define NUMREG 7
+#define NUMREG 8
 int16_t vregister[NUMREG]; // working copy in SRAM
 
 void set_registers_to_original_values()
@@ -162,6 +162,8 @@ void set_registers_to_original_values()
     vregister[4] = 0;    // trigger channel for internal trigger
     vregister[5] = 100;  // trigger level as a signed integer
     vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
+    vregister[7] = 0;    // advertising period (in microseconds) for the RTDP
+    // A value of zero will disable the RTDP.
 }
 
 static inline uint32_t byte_size_of_sample_set(void)
@@ -486,7 +488,7 @@ void interpret_command(char* cmdStr)
 		break;
 	case 'n':
 		// Report number of virtual registers.
-		printf("n %d ok\n", NUMREG);
+		printf("%d ok\n", NUMREG);
 		break;
     case 'r':
         // Report a selected register value.
