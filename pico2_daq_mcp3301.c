@@ -8,8 +8,11 @@
 //    2025-04-14: move PIO-RX pin so that we have room for 8 RX pins.
 //    2025-04-15: implement code for reading 8 MCP3301 chips.
 //    2026-03-03: Adapt to PCB Rev. 1
+//                Port reporting functions from the BU79100G variant.
 //
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
+#include "pico/util/queue.h"
 #include "hardware/clocks.h"
 #include "hardware/gpio.h"
 #include "hardware/pio.h"
@@ -17,6 +20,7 @@
 #include "hardware/timer.h"
 #include "hardware/spi.h"
 #include "pico/binary_info.h"
+#include "hardware/dma.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -24,14 +28,17 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.11 2026-03-03 Pico2 as DAQ-MCU"
-const uint n_mcp3301_chips = 8;
+#define VERSION_STR "v0.12 Pico2 as DAQ-MCU 2026-03-03"
+const uint n_adc_chips = 8;
 
 // Names for the IO pins.
-const uint READY_PIN = 15;
-const uint FLAG_PIN = 26;
-const uint Pico2_EVENT_PIN = 3; // not used in PCB Rev. 1
+// A. For interaction with the PIC18F26Q71 COMMS-MCU.
+// UART0_TX on GP0 (default)
+// UART0_RX in GP1 (default)
 const uint SYSTEM_EVENTn_PIN = 2;
+const uint Pico2_EVENT_PIN = 3; // not used in PCB Rev. 1
+const uint READY_PIN = 15;
+// B. For interaction with the BU79100G ADC chips.
 const uint PIO_CSn_PIN = 5;
 const uint PIO_CLK_PIN = 6;
 const uint PIO_RX0_PIN = 7;
@@ -42,6 +49,15 @@ const uint PIO_RX4_PIN = 11;
 const uint PIO_RX5_PIN = 12;
 const uint PIO_RX6_PIN = 13;
 const uint PIO_RX7_PIN = 14;
+// C. For implementing the Real-Time Data Port.
+const uint SPI0_CSn_PIN = 17;
+const uint SPI0_SCK_PIN = 18;
+const uint SPI0_TX_PIN = 19;
+const uint RTDP_DE_PIN = 20;
+const uint RTDP_REn_PIN = 21;
+const uint DATA_RDY_PIN = 27;
+// D. For timing via a logic probe.
+const uint TIMING_FLAG_PIN = 26;
 
 static inline void assert_ready()
 {
@@ -53,24 +69,31 @@ static inline void assert_not_ready()
     gpio_put(READY_PIN, 0);
 }
 
-static inline void assert_event()
+static inline uint8_t read_system_eventn_line()
 {
-	gpio_put(Pico2_EVENT_PIN, 1);
+	return (uint8_t) gpio_get(SYSTEM_EVENTn_PIN);
 }
 
-static inline void release_event()
+static inline void assert_eventn()
 {
-	gpio_put(Pico2_EVENT_PIN, 0);
+	gpio_put(SYSTEM_EVENTn_PIN, 0);
+	gpio_set_dir(SYSTEM_EVENTn_PIN, GPIO_OUT);
+}
+
+static inline void release_eventn_line()
+{
+	gpio_set_dir(SYSTEM_EVENTn_PIN, GPIO_IN);
+	gpio_pull_up(SYSTEM_EVENTn_PIN);
 }
 
 static inline void raise_flag_pin()
 {
-	gpio_put(FLAG_PIN, 1);
+	gpio_put(TIMING_FLAG_PIN, 1);
 }
 
 static inline void lower_flag_pin()
 {
-	gpio_put(FLAG_PIN, 0);
+	gpio_put(TIMING_FLAG_PIN, 0);
 }
 
 static inline uint8_t read_system_event_pin()
@@ -89,6 +112,28 @@ static inline void sampling_LED_ON()
 static inline void sampling_LED_OFF()
 {
     gpio_put(LED_PIN, 0);
+}
+
+static inline void assert_data_ready()
+{
+    gpio_put(DATA_RDY_PIN, 1);
+}
+
+static inline void clear_data_ready()
+{
+    gpio_put(DATA_RDY_PIN, 0);
+}
+
+static inline void enable_RTDP_transceiver()
+{
+    gpio_put(RTDP_REn_PIN, 0);
+    gpio_put(RTDP_DE_PIN, 1);
+}
+
+static inline void disable_RTDP_transceiver()
+{
+    gpio_put(RTDP_REn_PIN, 1);
+    gpio_put(RTDP_DE_PIN, 0);
 }
 
 // A place for the current samples.
@@ -117,6 +162,12 @@ void set_registers_to_original_values()
     vregister[4] = 0;    // trigger channel for internal trigger
     vregister[5] = 100;  // trigger level as a signed integer
     vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
+}
+
+static inline uint32_t byte_size_of_sample_set(void)
+{
+    uint8_t n_chan = (uint8_t)vregister[1];
+    return 2 * n_chan;
 }
 
 static inline uint32_t max_n_samples(void)
@@ -149,6 +200,17 @@ static inline void unpack_nybbles_from_word(uint32_t word, uint16_t values[], ui
 	}
 }
 
+//
+// core1 services the Real-Time Data Port
+// which makes a snapshot of the sampled data available
+// to an external SPI master device.
+//
+// [TODO] 2026-03-03 Port the RTDP code from the BU79100G variant of the firmware.
+
+//
+// core0 services the main sampling activity.
+//
+
 void __no_inline_not_in_flash_func(sample_channels)(void)
 // Sample the analog channels periodically and store the data in SRAM.
 //
@@ -176,7 +238,7 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
     int16_t trigger_level = vregister[5];
     uint8_t trigger_slope = (uint8_t)vregister[6];
     //
-    release_event();
+    release_eventn_line();
     next_halfword_index_in_data = 0; // Start afresh, at index 0.
     halfword_index_has_wrapped_around = 0;
     uint8_t post_event = 0;
@@ -230,14 +292,14 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
             switch (mode) {
             case TRIGGER_IMMEDIATE:
                 post_event = 1;
-                assert_event();
+                assert_eventn();
                 break;
             case TRIGGER_INTERNAL: {
                 int16_t s = res[trigger_chan];
                 if ((trigger_slope == 1 && s >= trigger_level) ||
                     (trigger_slope == 0 && s <= trigger_level)) {
                     post_event = 1;
-                    assert_event();
+                    assert_eventn();
                 } }
                 break;
             case TRIGGER_EXTERNAL:
@@ -300,6 +362,25 @@ char* sample_set_to_str(uint32_t n)
     return str_buf1;
 }
 
+char* mem_dump_to_str(uint32_t addr)
+// Write a 32-byte page of sample data into the serial buffer as hex digits
+// representing the 16-bit converted samples. Use big-endian format.
+// Finally, return a pointer to the buffer.
+{
+    // Assume that the byte address is correctly aligned and
+    // that there are 16 2-byte values to send.
+	uint32_t ihw = addr / 2; // half-word index
+    uint8_t high_byte = (uint8_t) ((data[ihw] & 0xff00) >> 8);
+    uint8_t low_byte = (uint8_t) (data[ihw] & 0x00ff);
+    snprintf(str_buf1, NSTRBUF1, "%02x%02x", high_byte, low_byte);
+    for (uint8_t ch=1; ch < 16; ch++) {
+        high_byte = (uint8_t) ((data[ihw+ch] & 0xff00) >> 8);
+        low_byte = (uint8_t) (data[ihw+ch] & 0x00ff);
+        snprintf(str_buf2, NSTRBUF2, "%02x%02x", high_byte, low_byte);
+        strncat(str_buf1, str_buf2, NSTRBUF2);
+    }
+	return str_buf1;
+}
 
 // For incoming serial comms
 #define NBUFA 80
@@ -384,7 +465,7 @@ void interpret_command(char* cmdStr)
 	case 'v':
 		// Report version string and (some) configuration details.
 		uint f_clk_sys = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS);
-		printf("v %s %dxMCP3301 %d kHz\n", VERSION_STR, n_mcp3301_chips, f_clk_sys);
+		printf("v %s %dxMCP3301 %d kHz ok\n", VERSION_STR, n_adc_chips, f_clk_sys);
 		break;
 	case 'L':
 		// Turn LED on or off.
@@ -397,15 +478,15 @@ void interpret_command(char* cmdStr)
 			i = (uint8_t) (atoi(token_ptr) & 1);
 			gpio_put(LED_PIN, i);
 			override_led = i;
-			printf("L %d\n", i);
+			printf("%d ok\n", i);
 		} else {
 			// There was no text to give a value.
-			printf("L error: no value\n");
+			printf("fail: no value\n");
 		}
 		break;
 	case 'n':
 		// Report number of virtual registers.
-		printf("n %d\n", NUMREG);
+		printf("n %d ok\n", NUMREG);
 		break;
     case 'r':
         // Report a selected register value.
@@ -415,12 +496,12 @@ void interpret_command(char* cmdStr)
             i = (uint8_t) atoi(token_ptr);
             if (i < NUMREG) {
                 v = vregister[i];
-                printf("r %d\n", v);
+                printf("%d ok\n", v);
             } else {
-                printf("r error: invalid register.\n");
+                printf("fail: invalid register.\n");
             }
         } else {
-            printf("r error: no register specified.\n");
+            printf("fail: no register specified.\n");
         }
         break;
     case 's':
@@ -435,28 +516,60 @@ void interpret_command(char* cmdStr)
                     // Assume text is value for register.
                     v = (int16_t) atoi(token_ptr);
                     vregister[i] = v;
-                    printf("s reg[%u] set to %d\n", i, v);
+                    printf("reg[%u] set to %d ok\n", i, v);
                 } else {
-                    printf("s error: no value given.\n");
+                    printf("fail: no value given.\n");
                 }
             } else {
-                printf("s error: invalid register.\n");
+                printf("fail: invalid register.\n");
             }
         } else {
-            printf("s error: no register specified.\n");
+            printf("fail: no register specified.\n");
         }
         break;
     case 'F':
         // Set the values of the registers to those values hard-coded
         // into this firmware.  A factory default, so to speak.
         set_registers_to_original_values();
-        printf("F vregisters reset\n");
+        printf("vregisters reset ok\n");
+        break;
+    case 'b':
+        // Byte size of sample set.
+        printf("%d ok\n", byte_size_of_sample_set());
+        break;
+    case 'm':
+        // Maximum number of sample sets that can be stored.
+        printf("%d ok\n", max_n_samples());
+        break;
+    case 'T':
+        // Total bytes assigned to sample storage.
+        printf("%d ok\n", N_HALFWORDS*2);
+        break;
+    case 'a':
+        // Byte index (within sample data storage) of the oldest sample.
+        printf("%d ok\n", oldest_halfword_index_in_data()*2);
+        break;
+    case 'N':
+        // Size of data storage in 32-byte pages.
+        printf("%d ok\n", N_HALFWORDS/16);
+        break;
+    case 'M':
+        // Page of bytes (in big-endian format) representing 16 2-byte values.
+        // Start at the specified byte-index within the stored data.
+        token_ptr = strtok(&cmdStr[1], sep_tok);
+        if (token_ptr) {
+            // Found some nonblank text, assume byte-index.
+            uint32_t addr = (uint32_t) atoi(token_ptr);
+            printf("%s ok\n", mem_dump_to_str(addr));
+        } else {
+            printf("fail: no byte-index specified.\n");
+        }
         break;
     case 'g':
         // Start the sampling process.
         // What happens next, and when it happens, depends on the
         // register settings and external signals.
-        printf("g start sampling\n");
+        printf("start sampling ok\n");
         // The task takes an indefinite time,
         // so let the COMMS_MCU know via busy# pin.
         assert_not_ready();
@@ -465,12 +578,15 @@ void interpret_command(char* cmdStr)
         break;
     case 'k':
         // Report the value of the keeping-up flag.
-        printf("k %u\n", did_not_keep_up_during_sampling);
+        printf("%u ok\n", did_not_keep_up_during_sampling);
         break;
     case 'I':
         // Immediately take a single sample set and report values.
         sample_channels_once();
-        printf("I %s\n", sample_set_to_str(0));
+        // Despite the name saying that the channels are sampled once,
+        // they are actually sampled twice and only the second set is
+        // valid.  We return that second sample set, at index 1.
+        printf("%s ok\n", sample_set_to_str(1));
         break;
     case 'P':
         // Report the selected sample set for the configured channels.
@@ -479,20 +595,20 @@ void interpret_command(char* cmdStr)
         if (token_ptr) {
             // Found some nonblank text, assume sample index.
             uint32_t ii = (uint32_t) atol(token_ptr);
-            printf("P %s\n", sample_set_to_str(ii));
+            printf("%s ok\n", sample_set_to_str(ii));
         } else {
-            printf("P error: no index given.\n");
+            printf("fail: no index given.\n");
         }
         break;
     case 'z':
         // Release the EVENT# line.
-        // Presumably this line has been help low following an internal
-        // trigger event during the sampling process.
-        release_event();
-        printf("z event line released\n");
+        // Presumably this line has been kept low,
+        // following a trigger event during the sampling process.
+        release_eventn_line();
+        printf("event line released ok\n");
         break;
 	default:
-		printf("%c error: Unknown command\n", cmdStr[0]);
+		printf("fail: Unknown command %c\n", cmdStr[0]);
     }
     if (!override_led) gpio_put(LED_PIN, 0); // To indicate end of interpreter activity.
 } // end interpret_command()
@@ -512,10 +628,10 @@ int main()
 	//
     bi_decl(bi_program_description(VERSION_STR));
     bi_decl(bi_1pin_with_name(LED_PIN, "LED output pin"));
-    bi_decl(bi_1pin_with_name(FLAG_PIN, "Flag output pin for timing measurements"));
+    bi_decl(bi_1pin_with_name(TIMING_FLAG_PIN, "Flag output pin for timing measurements"));
     bi_decl(bi_1pin_with_name(READY_PIN, "Ready/Busy# output pin"));
-    bi_decl(bi_1pin_with_name(Pico2_EVENT_PIN, "Pico2 EVENT output pin"));
-    bi_decl(bi_1pin_with_name(SYSTEM_EVENTn_PIN, "Sense EVENT input pin"));
+    bi_decl(bi_1pin_with_name(Pico2_EVENT_PIN, "Pico2 EVENT output pin (not used)"));
+    bi_decl(bi_1pin_with_name(SYSTEM_EVENTn_PIN, "System EVENTn input/output pin"));
     bi_decl(bi_1pin_with_name(PIO_CSn_PIN, "PIO0 chip select pin"));
     bi_decl(bi_1pin_with_name(PIO_CLK_PIN, "PIO0 clock output pin"));
     bi_decl(bi_1pin_with_name(PIO_RX0_PIN, "PIO0 data0 input pin"));
@@ -526,6 +642,12 @@ int main()
     bi_decl(bi_1pin_with_name(PIO_RX5_PIN, "PIO0 data5 input pin"));
     bi_decl(bi_1pin_with_name(PIO_RX6_PIN, "PIO0 data6 input pin"));
     bi_decl(bi_1pin_with_name(PIO_RX7_PIN, "PIO0 data7 input pin"));
+    bi_decl(bi_1pin_with_name(SPI0_CSn_PIN, "SPI0 slave-select input pin"));
+    bi_decl(bi_1pin_with_name(SPI0_SCK_PIN, "SPI0 clock input pin"));
+    bi_decl(bi_1pin_with_name(SPI0_TX_PIN, "SPI0 data output pin"));
+    bi_decl(bi_1pin_with_name(RTDP_DE_PIN, "RTDP transmit driver enable pin"));
+    bi_decl(bi_1pin_with_name(RTDP_REn_PIN, "RTDP read serial-clock enable pin"));
+    bi_decl(bi_1pin_with_name(DATA_RDY_PIN, "RTDP data-ready output pin"));
 	//
 	// Flash LED twice at start up.
 	//
@@ -541,25 +663,45 @@ int main()
 	uint offset = pio_add_program(pio0, &mcp3301_eight_read_program);
 	mcp3301_eight_read_program_init(pio0, 0, offset);
 	//
-	// We output an event pin that gets buffered by the COMMS MCU
-	// and reflected onto the system event line.
-	// We sense that system event line, also.
+	// No longer using Pico2_EVENT_PIN.
+	// gpio_init(Pico2_EVENT_PIN);
+	// gpio_set_dir(Pico2_EVENT_PIN, GPIO_OUT);
+    // gpio_disable_pulls(Pico2_EVENT_PIN);
 	//
-	gpio_init(Pico2_EVENT_PIN);
-	gpio_set_dir(Pico2_EVENT_PIN, GPIO_OUT);
+	// We initially sense the system EVENTn line.
+	// Later, we may/will assert a low signal on it.
 	gpio_init(SYSTEM_EVENTn_PIN);
 	gpio_set_dir(SYSTEM_EVENTn_PIN, GPIO_IN);
-	release_event();
+    gpio_pull_up(SYSTEM_EVENTn_PIN);
+	release_eventn_line(); // redundant
 	//
-    gpio_init(FLAG_PIN);
-    gpio_set_dir(FLAG_PIN, GPIO_OUT);
+    gpio_init(TIMING_FLAG_PIN);
+    gpio_set_dir(TIMING_FLAG_PIN, GPIO_OUT);
     lower_flag_pin();
     did_not_keep_up_during_sampling = 0;
+    //
+    // Set up the Real-Time Data Port.
+    // First, the RS485 transceiver.
+    gpio_init(RTDP_DE_PIN);
+    gpio_set_dir(RTDP_DE_PIN, GPIO_OUT);
+    gpio_disable_pulls(RTDP_DE_PIN);
+    gpio_init(RTDP_REn_PIN);
+    gpio_set_dir(RTDP_REn_PIN, GPIO_OUT);
+    gpio_disable_pulls(RTDP_REn_PIN);
+    disable_RTDP_transceiver();
+    // Second, the DATA_RDY signal.
+    gpio_init(DATA_RDY_PIN);
+    gpio_set_dir(DATA_RDY_PIN, GPIO_OUT);
+    gpio_disable_pulls(DATA_RDY_PIN);
+    clear_data_ready();
+    // Third, use the SPI0 module as a slave, for transmit only,
+    // but defer its initialization until we need it.
     //
 	// Signal to the COMMS MCU that we are ready.
 	//
     gpio_init(READY_PIN);
     gpio_set_dir(READY_PIN, GPIO_OUT);
+    gpio_disable_pulls(READY_PIN);
 	assert_ready();
     //
 	// Enter the command loop.

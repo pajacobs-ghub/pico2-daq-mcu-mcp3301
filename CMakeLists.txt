@@ -29,9 +29,12 @@ target_sources(pico2_daq_mcp3301 PRIVATE pico2_daq_mcp3301.c)
 # pull in common dependencies
 target_link_libraries(pico2_daq_mcp3301 PRIVATE
 	pico_stdlib
+    pico_multicore
+    pico_util
 	hardware_pio
 	hardware_timer
 	hardware_spi
+    hardware_dma
 	)
 
 # enable uart0
@@ -41,5 +44,5 @@ pico_enable_stdio_uart(pico2_daq_mcp3301 1)
 pico_add_extra_outputs(pico2_daq_mcp3301)
 
 # add url via pico_set_program_url
-pico_set_program_url(pico2_daq_mcp3301 "https://github.com/pajacobs-ghub/mcp3301-adc-with-pio")
+pico_set_program_url(pico2_daq_mcp3301 "https://github.com/pajacobs-ghub/pico2-daq-mcu-mcp3301")
 
