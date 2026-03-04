@@ -28,7 +28,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.13 Pico2 as DAQ-MCU 2026-03-04"
+#define VERSION_STR "v0.14 Pico2 as DAQ-MCU 2026-03-05"
 const uint n_adc_chips = 8;
 
 // Names for the IO pins.
@@ -467,7 +467,7 @@ void interpret_command(char* cmdStr)
 	case 'v':
 		// Report version string and (some) configuration details.
 		uint f_clk_sys = frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS);
-		printf("v %s %dxMCP3301 %d kHz ok\n", VERSION_STR, n_adc_chips, f_clk_sys);
+		printf("%s %dxMCP3301 %d kHz ok\n", VERSION_STR, n_adc_chips, f_clk_sys);
 		break;
 	case 'L':
 		// Turn LED on or off.
@@ -518,7 +518,7 @@ void interpret_command(char* cmdStr)
                     // Assume text is value for register.
                     v = (int16_t) atoi(token_ptr);
                     vregister[i] = v;
-                    printf("reg[%u] set to %d ok\n", i, v);
+                    printf("reg[%u] %d ok\n", i, v);
                 } else {
                     printf("fail: no value given.\n");
                 }
