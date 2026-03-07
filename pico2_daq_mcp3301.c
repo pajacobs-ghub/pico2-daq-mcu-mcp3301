@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.15 Pico2 as DAQ-MCU 2026-03-07"
+#define VERSION_STR "v0.16 Pico2 as DAQ-MCU 2026-03-07"
 const uint n_adc_chips = 8;
 
 // Names for the IO pins.
@@ -152,31 +152,37 @@ uint8_t did_not_keep_up_during_sampling;
 
 // Parameters controlling the device are stored in virtual config registers.
 #define NUMREG 8
-int16_t vregister[NUMREG]; // working copy in SRAM
+int vregister[NUMREG]; // working copy in SRAM
+const uint PERIOD_US = 0;
+const uint NCHANNELS = 1;
+const uint NSAMPLES = 2;
+const uint TRIG_MODE = 3;
+const uint TRIG_CHAN = 4;
+const uint TRIG_LEVEL = 5;
+const uint TRIG_SLOPE = 6;
+const uint RTDP_US = 7;
 
 void set_registers_to_original_values()
 {
-    vregister[0] = 100;  // sample period in microseconds (timer ticks)
-    vregister[1] = 8;    // number of channels to sample 1, 2, 4 or 8; (these fit neatly)
-    vregister[2] = 128;  // number of samples in record after trigger event
-    vregister[3] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
-    vregister[4] = 0;    // trigger channel for internal trigger
-    vregister[5] = 100;  // trigger level as a signed integer
-    vregister[6] = 1;    // trigger slope 0=sample-below-level 1=sample-above-level
-    vregister[7] = 0;    // advertising period (in microseconds) for the RTDP
-    // A value of zero will disable the RTDP.
+    vregister[PERIOD_US] = 100;  // sample period in microseconds (timer ticks)
+    vregister[NCHANNELS] = 8;    // number of channels to sample 1, 2, 4 or 8; (these fit neatly)
+    vregister[NSAMPLES] = 128;   // number of samples in record after trigger event
+    vregister[TRIG_MODE] = 0;    // trigger mode 0=immediate, 1=internal, 2=external
+    vregister[TRIG_CHAN] = 0;    // trigger channel for internal trigger
+    vregister[TRIG_LEVEL] = 100; // trigger level as a signed integer
+    vregister[TRIG_SLOPE] = 1;   // trigger slope 0=sample-below-level 1=sample-above-level
+    vregister[RTDP_US] = 0;      // advertising period (in microseconds) for the RTDP
+                                 // A value of zero will disable the RTDP.
 }
 
 static inline uint32_t byte_size_of_sample_set(void)
 {
-    uint8_t n_chan = (uint8_t)vregister[1];
-    return 2 * n_chan;
+    return 2 * (uint8_t)vregister[NCHANNELS];
 }
 
 static inline uint32_t max_n_samples(void)
 {
-    uint8_t n_chan = (uint8_t)vregister[1];
-    return N_HALFWORDS / n_chan;
+    return N_HALFWORDS / (uint8_t)vregister[NCHANNELS];
 }
 
 static inline uint32_t oldest_halfword_index_in_data()
@@ -244,7 +250,7 @@ void __no_inline_not_in_flash_func(core1_service_RTDP)(void)
     channel_config_set_read_increment(&rx_cfg, false);
     channel_config_set_write_increment(&rx_cfg, true);
     //
-    uint timeout_period_us = vregister[7];
+    uint timeout_period_us = vregister[RTDP_US];
     // At 2MHz, 16 bytes transfer in about 64us,
     // so it does not make much sense to have a very short timeout.
     if (timeout_period_us < 100) timeout_period_us = 100;
@@ -380,16 +386,16 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
 //
 {
     // Get configuration data from virtual registers.
-    uint16_t period_us = (uint16_t)vregister[0];
-    uint8_t n_chan = (uint8_t)vregister[1];
-    uint8_t mode = (uint8_t)vregister[3];
+    uint16_t period_us = (uint16_t)vregister[PERIOD_US];
+    uint8_t n_chan = (uint8_t)vregister[NCHANNELS];
+    uint8_t mode = (uint8_t)vregister[TRIG_MODE];
 # define TRIGGER_IMMEDIATE 0
 # define TRIGGER_INTERNAL 1
 # define TRIGGER_EXTERNAL 2
-    uint8_t trigger_chan = (uint8_t)vregister[4];
-    int16_t trigger_level = vregister[5];
-    uint8_t trigger_slope = (uint8_t)vregister[6];
-    bool service_RTDP = (vregister[4] != 0) && (period_us >= 2);
+    uint8_t trigger_chan = (uint8_t)vregister[TRIG_CHAN];
+    int16_t trigger_level = (int16_t)vregister[TRIG_LEVEL];
+    uint8_t trigger_slope = (uint8_t)vregister[TRIG_SLOPE];
+    bool service_RTDP = (vregister[RTDP_US] != 0) && (period_us >= 2);
     uint cmd = RTDP_STOP;
     if (service_RTDP) {
         queue_init(&RTDP_command_fifo, sizeof(uint), RTDP_FIFO_LENGTH);
@@ -399,7 +405,7 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
     next_halfword_index_in_data = 0; // Start afresh, at index 0.
     halfword_index_has_wrapped_around = 0;
     uint8_t post_event = 0;
-    uint16_t samples_remaining = (uint16_t)vregister[2];
+    uint16_t samples_remaining = (uint16_t)vregister[NSAMPLES];
     did_not_keep_up_during_sampling = 0; // Presume that we will be fast enough.
     if (service_RTDP) {
         multicore_launch_core1(core1_service_RTDP);
@@ -509,19 +515,19 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
 void sample_channels_once()
 {
     // We temporarily override some of the registers to make this happen.
-    uint16_t ticks_save = (uint16_t)vregister[0];
-    uint8_t mode_save = (uint8_t)vregister[3];
-    uint16_t samples_remaining_save = (uint16_t)vregister[2];
+    int ticks_save = vregister[PERIOD_US];
+    int mode_save = vregister[TRIG_MODE];
+    int samples_remaining_save = vregister[NSAMPLES];
     //
-    vregister[0] = (uint16_t)20; // Time enough to do a full scan.
-    vregister[3] = 0; // Immediate mode.
-    vregister[2] = 1; // One sample set.
+    vregister[PERIOD_US] = 20; // Time enough to do a full scan.
+    vregister[TRIG_MODE] = TRIGGER_IMMEDIATE;
+    vregister[NSAMPLES] = 1; // One sample set.
     sample_channels();
     //
     // Restore register values.
-    vregister[0] = ticks_save;
-    vregister[3] = mode_save;
-    vregister[2] = samples_remaining_save;
+    vregister[PERIOD_US] = ticks_save;
+    vregister[TRIG_MODE] = mode_save;
+    vregister[NSAMPLES] = samples_remaining_save;
     return;
 } // end sample_channels_once()
 
@@ -532,7 +538,7 @@ char str_buf2[NSTRBUF2];
 
 char* sample_set_to_str(uint32_t n)
 {
-    uint8_t n_chan = (uint8_t)vregister[1];
+    uint8_t n_chan = (uint8_t)vregister[NCHANNELS];
     // Start with index of oldest sample, then move to selected sample.
     uint32_t index = oldest_halfword_index_in_data();
     index += n_chan * n;
@@ -643,7 +649,7 @@ void interpret_command(char* cmdStr)
     char* token_ptr;
     const char* sep_tok = ", ";
     uint8_t i;
-	int16_t v;
+	int v;
     // printf("DEBUG: DAQ MCU cmdStr=\"%s\"", cmdStr);
     if (!override_led) gpio_put(LED_PIN, 1); // To indicate start of interpreter activity.
     switch (cmdStr[0]) {
@@ -699,7 +705,7 @@ void interpret_command(char* cmdStr)
                 token_ptr = strtok(NULL, sep_tok);
                 if (token_ptr) {
                     // Assume text is value for register.
-                    v = (int16_t) atoi(token_ptr);
+                    v = atoi(token_ptr);
                     vregister[i] = v;
                     printf("reg[%u] %d ok\n", i, v);
                 } else {
