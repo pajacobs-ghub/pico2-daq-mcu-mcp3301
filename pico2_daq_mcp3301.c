@@ -29,7 +29,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.16 Pico2 as DAQ-MCU 2026-03-07"
+#define VERSION_STR "v0.17 Pico2 as DAQ-MCU 2026-03-08"
 const uint n_adc_chips = 8;
 
 // Names for the IO pins.
@@ -56,7 +56,7 @@ const uint SPI0_SCK_PIN = 18;
 const uint SPI0_TX_PIN = 19;
 const uint RTDP_DE_PIN = 20;
 const uint RTDP_REn_PIN = 21;
-const uint DATA_RDY_PIN = 27;
+const uint DATA_RDY_PIN = 22;
 // D. For timing via a logic probe.
 const uint TIMING_FLAG_PIN = 26;
 
@@ -250,14 +250,14 @@ void __no_inline_not_in_flash_func(core1_service_RTDP)(void)
     channel_config_set_read_increment(&rx_cfg, false);
     channel_config_set_write_increment(&rx_cfg, true);
     //
-    uint timeout_period_us = vregister[RTDP_US];
+    uint timeout_period_us = (uint) vregister[RTDP_US];
     // At 2MHz, 16 bytes transfer in about 64us,
     // so it does not make much sense to have a very short timeout.
     if (timeout_period_us < 100) timeout_period_us = 100;
     //
     // The main responsibility of core1 is to look for incoming commands and act.
     // This provides a synchronization mechanism, such that core1 advertises
-    // available data only when core0 has put some new data into RTP_data_words,
+    // available data only when core0 has put some new data into RTP_data_values,
     // and core0 will only put new data in that array while core1 is active and idle.
     //
     RTDP_status = RTDP_IDLE;
@@ -395,10 +395,15 @@ void __no_inline_not_in_flash_func(sample_channels)(void)
     uint8_t trigger_chan = (uint8_t)vregister[TRIG_CHAN];
     int16_t trigger_level = (int16_t)vregister[TRIG_LEVEL];
     uint8_t trigger_slope = (uint8_t)vregister[TRIG_SLOPE];
-    bool service_RTDP = (vregister[RTDP_US] != 0) && (period_us >= 2);
+    bool service_RTDP = vregister[RTDP_US] != 0;
     uint cmd = RTDP_STOP;
     if (service_RTDP) {
         queue_init(&RTDP_command_fifo, sizeof(uint), RTDP_FIFO_LENGTH);
+        // We may not be reading all analog channels, so put zero values
+        // into the whole array to initialize it.
+        for (uint8_t ch=0; ch < MAXNCHAN; ch++) {
+            RTDP_data_values[ch] = 0;
+        }
     }
     //
     release_eventn_line();
