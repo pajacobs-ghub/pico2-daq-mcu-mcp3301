@@ -10,6 +10,7 @@
 //    2026-03-03: Adapt to PCB Rev. 1
 //                Port reporting functions from the BU79100G variant.
 //    2026-03-07: RTDP service function.
+//    2026-03-23: Add command 'A' to report byte-index of next data to be stored.
 //
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
@@ -29,7 +30,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.17 Pico2 as DAQ-MCU 2026-03-08"
+#define VERSION_STR "v0.18 Pico2 as DAQ-MCU 2026-03-23"
 const uint n_adc_chips = 8;
 
 // Names for the IO pins.
@@ -744,6 +745,10 @@ void interpret_command(char* cmdStr)
     case 'a':
         // Byte index (within sample data storage) of the oldest sample.
         printf("%d ok\n", oldest_halfword_index_in_data()*2);
+        break;
+    case 'A':
+        // Byte index (within sample data storage) of the next sample to be stored.
+        printf("%d ok\n", next_halfword_index_in_data*2);
         break;
     case 'N':
         // Size of data storage in 32-byte pages.
