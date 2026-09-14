@@ -40,7 +40,7 @@ const uint n_adc_chips = 8;
 const uint SYSTEM_EVENTn_PIN = 2;
 const uint Pico2_EVENT_PIN = 3; // not used in PCB Rev. 1
 const uint READY_PIN = 15;
-// B. For interaction with the BU79100G ADC chips.
+// B. For interaction with the MCP3301 ADC chips.
 const uint PIO_CSn_PIN = 5;
 const uint PIO_CLK_PIN = 6;
 const uint PIO_RX0_PIN = 7;
