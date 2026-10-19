@@ -30,7 +30,7 @@
 #include <ctype.h>
 #include "mcp3301.pio.h"
 
-#define VERSION_STR "v0.18 Pico2 as DAQ-MCU 2026-03-23"
+#define VERSION_STR "v0.19 Pico2 as DAQ-MCU 2026-10-19"
 const uint n_adc_chips = 8;
 
 // Names for the IO pins.
@@ -69,11 +69,6 @@ static inline void assert_ready()
 static inline void assert_not_ready()
 {
     gpio_put(READY_PIN, 0);
-}
-
-static inline uint8_t read_system_eventn_line()
-{
-	return (uint8_t) gpio_get(SYSTEM_EVENTn_PIN);
 }
 
 static inline void assert_eventn()
